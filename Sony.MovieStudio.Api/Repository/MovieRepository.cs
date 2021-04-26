@@ -14,30 +14,36 @@ namespace Sony.MovieStudio.Api.Repository
     public class MovieRepository : IMovieRepository
     {
         private ConcurrentDictionary<int, MovieDetails> _movies;
-        private object _lockObject = new object();
 
-        public async Task<MovieDetails> GetMovieById(int movieId)
+        public async Task<List<MovieDetails>> GetMovieById(int movieId)
         {
             if (movieId <= 0) throw new ArgumentException($"Invalid ID: {nameof(movieId)}");
 
             if (_movies == null) await LoadData();
 
-            if (!_movies.ContainsKey(movieId)) return null;
+            var moviesById = new List<MovieDetails>();
 
-            return _movies[movieId];
+            var allMoviesById = _movies.Where(x => x.Value.MoveId == movieId).Distinct();
+            foreach (var kv in allMoviesById)
+            {
+                var existingLanguageMovie = moviesById.Find(x => x.Language.Equals(kv.Value.Language));
+
+                if (existingLanguageMovie == null) moviesById.Add(kv.Value);
+            }
+
+            return moviesById;
         }
 
         public async Task<int> Save(string jsonMetadata)
         {
-            var metaData = JsonSerializer.Deserialize<MovieDetails>(jsonMetadata);
+            var movieDetails = JsonSerializer.Deserialize<MovieDetails>(jsonMetadata);
 
-            var existingMovie = await GetMovieById(metaData.MoveId);
-            if (existingMovie != null) throw new ArgumentException($"Movie ID {metaData.MoveId} already exists");
+            var itemId = _movies.Count;
+            _movies.TryAdd(itemId, movieDetails);
 
-            var movieId = _movies.Count;
-            _movies.TryAdd(movieId, metaData);
+            await SaveData(itemId, movieDetails);
 
-            return movieId;
+            return itemId;
         }
 
         /// <summary>
@@ -56,24 +62,27 @@ namespace Sony.MovieStudio.Api.Repository
 
             var moviesStat = new List<MovieStat>();
 
-            foreach (var kv in movieWatchDurations.OrderBy(x => x.Value.Count))
+            foreach (var kv in movieWatchDurations.OrderByDescending(x => x.Value.Count))
             {
-                var movieDetails = await GetMovieById(kv.Key);
-                if (movieDetails == null) continue;
+                var moviesById = await GetMovieById(kv.Key);
+                if (moviesById.Count == 0) continue;
 
-                var averageWatchDurationS = (int)(kv.Value.Sum() / (1000.0 * kv.Value.Count));
-
-                var movieStat = new MovieStat
+                foreach (var movieDetails in moviesById)
                 {
-                    MoveId = movieDetails.MoveId,
-                    Title = movieDetails.Title,
-                    ReleaseYear = movieDetails.ReleaseYear,
+                    var averageWatchDurationS = (int)(kv.Value.Sum() / (1000.0 * kv.Value.Count));
 
-                    Watches = kv.Value.Count,
-                    AverageWatchDurationS = averageWatchDurationS
-                };
+                    var movieStat = new MovieStat
+                    {
+                        MoveId = movieDetails.MoveId,
+                        Title = movieDetails.Title,
+                        ReleaseYear = movieDetails.ReleaseYear,
 
-                moviesStat.Add(movieStat);
+                        Watches = kv.Value.Count,
+                        AverageWatchDurationS = averageWatchDurationS
+                    };
+
+                    moviesStat.Add(movieStat);
+                }
             }
 
             return JsonSerializer.Serialize<List<MovieStat>>(moviesStat);
@@ -198,6 +207,12 @@ namespace Sony.MovieStudio.Api.Repository
             }
 
             return movieWatchDurations;
+        }
+        private async Task SaveData(int itemId, MovieDetails movieDetails)
+        {
+            if (_movies == null || _movies.Count == 0) return;
+
+            //TODO
         }
         #endregion Private Methods
     }
